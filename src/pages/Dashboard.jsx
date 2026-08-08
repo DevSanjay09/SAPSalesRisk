@@ -121,10 +121,39 @@ export default function Dashboard() {
   // Upload & validation state
   const [validationResult, setValidationResult] = useState(null);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
-  const [isNetworkModalOpen, setIsNetworkModalOpen] = useState(false);
+
+  // Network online/offline state
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  /* ── Network Listener ───────────────────────────────────────────── */
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      if (dataMode === 'demo') {
+        loadDemoData();
+      }
+    };
+    const handleOffline = () => {
+      setIsOffline(true);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [dataMode]);
 
   /* ── Load Demo CSV Data ────────────────────────────────────────── */
   const loadDemoData = useCallback(async () => {
+    if (!navigator.onLine) {
+      setIsOffline(true);
+      setState((prev) => ({ ...prev, loading: false }));
+      return;
+    }
+
     setState((prev) => ({ ...prev, loading: true, errors: [] }));
     setValidationResult(null);
 
@@ -156,6 +185,7 @@ export default function Dashboard() {
       // Sort by priority
       const sorted = sortByPriority(enriched);
 
+      setIsOffline(false);
       setState((prev) => ({
         ...prev,
         loading: false,
@@ -168,8 +198,8 @@ export default function Dashboard() {
         lastRefresh: Date.now(),
       }));
     } catch (err) {
-      console.warn('Demo CSV load error:', err);
-      setIsNetworkModalOpen(true);
+      console.warn('Demo CSV load error / network failure:', err);
+      setIsOffline(true);
       setState((prev) => ({
         ...prev,
         loading: false,
@@ -186,7 +216,11 @@ export default function Dashboard() {
 
   /* ── Handle Custom CSV Upload & Validation ─────────────────────── */
   const handleValidateUploadedFiles = async (files) => {
-    // Strict upload isolation: ONLY use uploaded files or empty arrays. NEVER fall back to demoCache!
+    if (!navigator.onLine) {
+      setIsOffline(true);
+      return;
+    }
+
     const sources = {
       orders: files.orders || null,
       inventory: files.inventory || null,
@@ -205,6 +239,10 @@ export default function Dashboard() {
 
   /* ── Process Valid Records from Validation ────────────────────── */
   const handleProcessValidRecords = () => {
+    if (isOffline || !navigator.onLine) {
+      setIsOffline(true);
+      return;
+    }
     if (!validationResult) return;
 
     const { validOrders, validInventory, validCredit } = validationResult;
@@ -229,6 +267,10 @@ export default function Dashboard() {
 
   /* ── Handle Edge Case Test Run ─────────────────────────────────── */
   const handleRunEdgeCase = (sortedOrders, valResult, scenario) => {
+    if (isOffline || !navigator.onLine) {
+      setIsOffline(true);
+      return;
+    }
     setDataMode('edge');
     setValidationResult(valResult);
     setState((prev) => ({
@@ -270,153 +312,167 @@ export default function Dashboard() {
   const { loading, errors, orders, selectedOrder, aiAnalysis, recommendations, lastRefresh } = state;
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 relative">
       <Header lastRefresh={lastRefresh} onRefresh={loadDemoData} />
 
       <SummaryBanner />
 
-      <main className="max-w-screen-2xl mx-auto px-6 py-6 space-y-6">
+      {/* Mandatory Blocking Offline Screen */}
+      <NetworkStatusModal
+        isOpen={isOffline}
+        onRetry={() => {
+          if (navigator.onLine) {
+            setIsOffline(false);
+            loadDemoData();
+          }
+        }}
+      />
 
-        {/* 1. Dataset Mode Selector */}
-        <section aria-label="Dataset Mode Selector">
-          <DataSourceSelector
-            dataMode={dataMode}
-            setDataMode={(mode) => {
-              setDataMode(mode);
-              if (mode === 'demo') handleResetToDemo();
-            }}
-            onReset={handleResetToDemo}
-          />
-        </section>
+      {/* Hide Dashboard Content when Offline */}
+      {!isOffline && (
+        <main className="max-w-screen-2xl mx-auto px-6 py-6 space-y-6">
 
-        {/* 2. Custom CSV Upload Panel */}
-        {dataMode === 'upload' && (
-          <section aria-label="Upload Dataset">
-            <UploadPanel onValidate={handleValidateUploadedFiles} />
-          </section>
-        )}
-
-        {/* 3. Validation Summary Card */}
-        {validationResult && (
-          <section aria-label="Validation Summary">
-            <ValidationSummary
-              result={validationResult}
-              onViewIssues={() => setShowIssuesModal(true)}
-              onProcess={handleProcessValidRecords}
+          {/* 1. Dataset Mode Selector */}
+          <section aria-label="Dataset Mode Selector">
+            <DataSourceSelector
+              dataMode={dataMode}
+              setDataMode={(mode) => {
+                setDataMode(mode);
+                if (mode === 'demo') handleResetToDemo();
+              }}
+              onReset={handleResetToDemo}
             />
           </section>
-        )}
 
-        {/* 4. Edge Case Testing Panel */}
-        <section aria-label="Edge Case Testing">
-          <EdgeCaseTester onRunEdgeCase={handleRunEdgeCase} />
-        </section>
+          {/* 2. Custom CSV Upload Panel */}
+          {dataMode === 'upload' && (
+            <section aria-label="Upload Dataset">
+              <UploadPanel onValidate={handleValidateUploadedFiles} />
+            </section>
+          )}
 
-        {/* Loading Skeleton */}
-        {loading && <LoadingSkeleton />}
+          {/* 3. Validation Summary Card */}
+          {validationResult && (
+            <section aria-label="Validation Summary">
+              <ValidationSummary
+                result={validationResult}
+                onViewIssues={() => setShowIssuesModal(true)}
+                onProcess={handleProcessValidRecords}
+              />
+            </section>
+          )}
 
-        {/* CSV Error Banner */}
-        {!loading && errors.length > 0 && <ValidationBanner errors={errors} />}
+          {/* 4. Edge Case Testing Panel */}
+          <section aria-label="Edge Case Testing">
+            <EdgeCaseTester onRunEdgeCase={handleRunEdgeCase} />
+          </section>
 
-        {/* Main Dashboard Sections */}
-        {!loading && errors.length === 0 && (
-          <>
-            {orders.length === 0 ? (
-              /* Empty Dataset State */
-              <div className="bg-white border border-slate-200 rounded-xl p-12 text-center shadow-card">
-                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <TbInfoCircle className="text-slate-400 text-3xl" />
+          {/* Loading Skeleton */}
+          {loading && <LoadingSkeleton />}
+
+          {/* CSV Error Banner */}
+          {!loading && errors.length > 0 && <ValidationBanner errors={errors} />}
+
+          {/* Main Dashboard Sections */}
+          {!loading && errors.length === 0 && (
+            <>
+              {orders.length === 0 ? (
+                /* Empty Dataset State */
+                <div className="bg-white border border-slate-200 rounded-xl p-12 text-center shadow-card">
+                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <TbInfoCircle className="text-slate-400 text-3xl" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800 mb-1">No Valid Orders Found</h3>
+                  <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
+                    The dataset contains no valid records to process into the risk engine. Upload a valid CSV dataset or select a demo edge case.
+                  </p>
+                  <button
+                    onClick={handleResetToDemo}
+                    className="btn-primary"
+                  >
+                    Reset to Demo Dataset
+                  </button>
                 </div>
-                <h3 className="text-base font-bold text-slate-800 mb-1">No Valid Orders Found</h3>
-                <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
-                  The dataset contains no valid records to process into the risk engine. Upload a valid CSV dataset or select a demo edge case.
-                </p>
-                <button
-                  onClick={handleResetToDemo}
-                  className="btn-primary"
-                >
-                  Reset to Demo Dataset
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* KPI Cards */}
-                <section aria-label="KPI Summary">
-                  <p className="section-title">Key Performance Indicators</p>
-                  <KPICards orders={orders} />
-                </section>
+              ) : (
+                <>
+                  {/* KPI Cards */}
+                  <section aria-label="KPI Summary">
+                    <p className="section-title">Key Performance Indicators</p>
+                    <KPICards orders={orders} />
+                  </section>
 
-                {/* Charts */}
-                <section aria-label="Risk Charts">
-                  <p className="section-title">Risk Analytics</p>
-                  <Charts orders={orders} />
-                </section>
+                  {/* Charts */}
+                  <section aria-label="Risk Charts">
+                    <p className="section-title">Risk Analytics</p>
+                    <Charts orders={orders} />
+                  </section>
 
-                {/* Priority Queue + Detail Panel */}
-                <section aria-label="Priority Queue">
-                  <p className="section-title">Order Intelligence</p>
+                  {/* Priority Queue + Detail Panel */}
+                  <section aria-label="Priority Queue">
+                    <p className="section-title">Order Intelligence</p>
 
-                  {selectedOrder ? (
-                    /* Detail view layout */
-                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                      {/* Priority Queue */}
-                      <div className="xl:col-span-1">
-                        <PriorityQueue
-                          orders={orders}
-                          selectedId={selectedOrder?.Order_ID}
-                          onSelect={handleSelectOrder}
-                        />
-                      </div>
-
-                      {/* Right panel split */}
-                      <div className="xl:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        <div className="space-y-4">
-                          <OrderDetails order={selectedOrder} onClose={handleCloseDetails} />
+                    {selectedOrder ? (
+                      /* Detail view layout */
+                      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                        {/* Priority Queue */}
+                        <div className="xl:col-span-1">
+                          <PriorityQueue
+                            orders={orders}
+                            selectedId={selectedOrder?.Order_ID}
+                            onSelect={handleSelectOrder}
+                          />
                         </div>
-                        <div className="space-y-4">
-                          <RecommendationPanel aiAnalysis={aiAnalysis} recommendations={recommendations} />
-                          <BeforeAfterPanel order={selectedOrder} aiAnalysis={aiAnalysis} />
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Default: queue + hint */
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                      <div className="lg:col-span-1">
-                        <PriorityQueue
-                          orders={orders}
-                          selectedId={null}
-                          onSelect={handleSelectOrder}
-                        />
-                      </div>
-                      <div className="lg:col-span-2 flex items-center justify-center">
-                        <div className="text-center py-16 px-8">
-                          <div className="w-14 h-14 bg-brand-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                            <TbInfoCircle className="text-brand-400 text-2xl" />
+
+                        {/* Right panel split */}
+                        <div className="xl:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div className="space-y-4">
+                            <OrderDetails order={selectedOrder} onClose={handleCloseDetails} />
                           </div>
-                          <p className="text-slate-600 font-semibold">Select an order to view details</p>
-                          <p className="text-slate-400 text-sm mt-1">
-                            Click any order in the queue or table below to see AI risk analysis, recommendations, and before/after comparison.
-                          </p>
+                          <div className="space-y-4">
+                            <RecommendationPanel aiAnalysis={aiAnalysis} recommendations={recommendations} />
+                            <BeforeAfterPanel order={selectedOrder} aiAnalysis={aiAnalysis} />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
-                </section>
+                    ) : (
+                      /* Default: queue + hint */
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        <div className="lg:col-span-1">
+                          <PriorityQueue
+                            orders={orders}
+                            selectedId={null}
+                            onSelect={handleSelectOrder}
+                          />
+                        </div>
+                        <div className="lg:col-span-2 flex items-center justify-center">
+                          <div className="text-center py-16 px-8">
+                            <div className="w-14 h-14 bg-brand-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <TbInfoCircle className="text-brand-400 text-2xl" />
+                            </div>
+                            <p className="text-slate-600 font-semibold">Select an order to view details</p>
+                            <p className="text-slate-400 text-sm mt-1">
+                              Click any order in the queue or table below to see AI risk analysis, recommendations, and before/after comparison.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </section>
 
-                {/* Order Table */}
-                <section aria-label="All Orders">
-                  <OrderTable
-                    orders={orders}
-                    selectedId={selectedOrder?.Order_ID}
-                    onSelect={handleSelectOrder}
-                  />
-                </section>
-              </>
-            )}
-          </>
-        )}
-      </main>
+                  {/* Order Table */}
+                  <section aria-label="All Orders">
+                    <OrderTable
+                      orders={orders}
+                      selectedId={selectedOrder?.Order_ID}
+                      onSelect={handleSelectOrder}
+                    />
+                  </section>
+                </>
+              )}
+            </>
+          )}
+        </main>
+      )}
 
       {/* Issues Modal */}
       {showIssuesModal && validationResult && (
@@ -425,16 +481,6 @@ export default function Dashboard() {
           onClose={() => setShowIssuesModal(false)}
         />
       )}
-
-      {/* Network Status Modal */}
-      <NetworkStatusModal
-        isOpen={isNetworkModalOpen}
-        onClose={() => setIsNetworkModalOpen(false)}
-        onRetry={() => {
-          setIsNetworkModalOpen(false);
-          loadDemoData();
-        }}
-      />
     </div>
   );
 }
